@@ -1,0 +1,17 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 5
+    paths:
+        - src
+        # The fixtures are analysed alongside src for one reason: the two traits
+        # this package exports are only ever used by a consuming application, so
+        # without a real usage inside the analysed paths PHPStan reports them as
+        # unused and then skips analysing their bodies entirely.
+        #
+        # The tests themselves are deliberately not analysed. Pest closures bind
+        # $this at runtime, so state assigned in beforeEach is invisible to
+        # static analysis and would bury the source errors under noise.
+        - tests/Fixtures
+    treatPhpDocTypesAsCertain: false

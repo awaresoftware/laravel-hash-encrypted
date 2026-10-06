@@ -2,8 +2,8 @@
 
 namespace Aware\HashEncrypted\Console;
 
-use Aware\HashEncrypted\Exceptions\DecryptionFailed;
 use Aware\HashEncrypted\CryptoService;
+use Aware\HashEncrypted\Exceptions\DecryptionFailed;
 use Illuminate\Console\Command;
 use Illuminate\Console\View\TaskResult;
 use Illuminate\Database\Eloquent\Builder;

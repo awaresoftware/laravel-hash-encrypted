@@ -1,0 +1,143 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Laravel and PHP compatibility. Deliberately not crossed with the driver
+  # matrix below: the supported Laravel versions only need a cheap smoke run, and
+  # multiplying 3 versions by 4 databases would burn CI minutes re-testing the
+  # same driver behaviour.
+  compat:
+    name: Laravel ${{ matrix.testbench }} / PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - testbench: '^9.0'
+            laravel: 11
+            php: '8.3'
+          - testbench: '^10.0'
+            laravel: 12
+            php: '8.4'
+          - testbench: '^11.0'
+            laravel: 13
+            php: '8.5'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116ccccaddc5834248c87452386958240 # v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: openssl, pdo, pdo_sqlite, mbstring, intl
+          tools: composer:v2
+          coverage: none
+
+      - name: Pin the Laravel version under test
+        run: |
+          composer require --dev --no-interaction --no-update \
+            "orchestra/testbench:${{ matrix.testbench }}"
+          composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run static analysis and tests
+        run: composer test
+
+  # Every supported database driver. Three of the four blind_index_strategy
+  # branches only ever execute here, so this is the job that proves the package
+  # is not accidentally SQLite-only.
+  drivers:
+    name: ${{ matrix.driver }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - driver: sqlite
+            username: ''
+          - driver: mysql
+            username: root
+          - driver: mariadb
+            username: root
+          - driver: pgsql
+            username: postgres
+
+    services:
+      mysql:
+        image: mysql:8.0
+        if: matrix.driver == 'mysql'
+        env:
+          MYSQL_DATABASE: testing
+          MYSQL_ROOT_PASSWORD: secret
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+      mariadb:
+        image: mariadb:11
+        if: matrix.driver == 'mariadb'
+        env:
+          MARIADB_DATABASE: testing
+          MARIADB_ROOT_PASSWORD: secret
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+      pgsql:
+        image: postgres:16
+        if: matrix.driver == 'pgsql'
+        env:
+          POSTGRES_DB: testing
+          POSTGRES_PASSWORD: secret
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DB_CONNECTION: ${{ matrix.driver }}
+      DB_HOST: 127.0.0.1
+      DB_DATABASE: testing
+      DB_USERNAME: ${{ matrix.username }}
+      DB_PASSWORD: secret
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116ccccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.5'
+          extensions: openssl, pdo, pdo_sqlite, pdo_mysql, pdo_pgsql, mbstring, intl
+          tools: composer:v2
+          coverage: none
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run tests
+        run: vendor/bin/pest

@@ -133,12 +133,17 @@ return [
     | How a blind index lookup is turned into SQL:
     |
     | - "expression" compares an index backed expression of the first N
-    |   characters. Supported by SQLite, PostgreSQL and MySQL 8.0.13+, it is
-    |   the only strategy that can also carry a UNIQUE constraint.
+    |   characters, created as a functional index. Supported by SQLite,
+    |   PostgreSQL and MySQL 8.0.13+.
     | - "prefix_like" compares with "LIKE 'blind-index%'". It is the only
-    |   option for MariaDB and for MySQL older than 8.0.13, where a prefix
-    |   index is created instead. Uniqueness must then be enforced by
-    |   application level validation only.
+    |   option for MariaDB and for MySQL older than 8.0.13, which have no
+    |   functional indexes, so a prefix index of the same width is created
+    |   instead.
+    |
+    | Both strategies carry a UNIQUE constraint, and both are safe: the prefix
+    | is exactly the blind index, because the packed value puts the blind index
+    | first and the prefix index is created over precisely its length. A unique
+    | prefix index over the whole blind index therefore still rejects duplicates.
     |
     | Set CRYPTO_BLIND_INDEX_STRATEGY to override the automatic detection.
     |

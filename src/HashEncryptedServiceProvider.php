@@ -7,6 +7,7 @@ use Aware\HashEncrypted\Console\ReEncryptCommand;
 use Aware\HashEncrypted\Rules\UniqueEncrypted;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Foundation\CachesConfiguration;
 use Illuminate\Contracts\Validation\Validator as ValidatorContract;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
@@ -55,16 +56,25 @@ class HashEncryptedServiceProvider extends ServiceProvider
      * key added by a later release would silently disappear instead of picking up
      * its new default. The recursive variant still lets the application's values
      * win per key, while filling in keys it does not know about.
+     *
+     * It is written out rather than delegating to
+     * ServiceProvider::replaceConfigRecursivelyFrom(), because that method is not
+     * available on every Laravel version this package supports.
      */
     protected function registerConfig(): void
     {
-        $path = __DIR__.'/../config/crypto.php';
+        $app = $this->app;
 
-        if (method_exists($this, 'replaceConfigRecursivelyFrom')) {
-            $this->replaceConfigRecursivelyFrom($path, 'crypto');
-        } else {
-            $this->mergeConfigFrom($path, 'crypto');
+        if ($app instanceof CachesConfiguration && $app->configurationIsCached()) {
+            return;
         }
+
+        $config = $app->make('config');
+
+        $config->set('crypto', array_replace_recursive(
+            require __DIR__.'/../config/crypto.php',
+            $config->get('crypto', []),
+        ));
     }
 
     /**

@@ -2,7 +2,6 @@
 
 namespace Aware\HashEncrypted\Database;
 
-use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -45,20 +44,10 @@ trait CreatesBlindIndexes
      */
     protected function createBlindIndexes(string $table, array $columns): void
     {
-        $connection = $this->connectionName()
-            ? DB::connection($this->connectionName())
-            : DB::connection();
+        $connection = DB::connection($this->getConnection());
 
         foreach (BlindIndex::createIndexStatements($connection, $table, $columns) as $statement) {
             $connection->statement($statement);
         }
-    }
-
-    /**
-     * Get the name of the migration's connection, if it declares one.
-     */
-    protected function connectionName(): ?string
-    {
-        return property_exists($this, 'connection') ? $this->connection : null;
     }
 }

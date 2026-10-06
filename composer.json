@@ -1,0 +1,60 @@
+{
+    "$schema": "https://getcomposer.org/schema.json",
+    "name": "aware/hash-encrypted",
+    "description": "Searchable encrypted columns for Laravel: an HMAC blind index and an AES-256-GCM ciphertext packed into a single, indexable database value.",
+    "keywords": [
+        "laravel",
+        "blind-index",
+        "encrypted-search",
+        "hmac",
+        "aes-gcm",
+        "eloquent"
+    ],
+    "license": "MIT",
+    "type": "library",
+    "require": {
+        "php": "^8.3",
+        "illuminate/auth": "^11.0|^12.0|^13.0",
+        "illuminate/console": "^11.0|^12.0|^13.0",
+        "illuminate/contracts": "^11.0|^12.0|^13.0",
+        "illuminate/database": "^11.0|^12.0|^13.0",
+        "illuminate/support": "^11.0|^12.0|^13.0",
+        "illuminate/validation": "^11.0|^12.0|^13.0"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.0",
+        "laravel/pint": "^1.0",
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "pestphp/pest": "^3.0|^4.0|^5.0",
+        "pestphp/pest-plugin-laravel": "^3.0|^4.0|^5.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Aware\\HashEncrypted\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\HashEncrypted\\": "tests/"
+        }
+    },
+    "scripts": {
+        "lint": "pint --parallel",
+        "lint:check": "pint --parallel --test",
+        "types:check": "phpstan analyse --no-progress",
+        "test": [
+            "@lint:check",
+            "@types:check",
+            "@php vendor/bin/pest"
+        ]
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true,
+            "php-http/discovery": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

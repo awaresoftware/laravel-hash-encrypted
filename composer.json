@@ -38,6 +38,13 @@
             "Tests\\HashEncrypted\\": "tests/"
         }
     },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Aware\\HashEncrypted\\HashEncryptedServiceProvider"
+            ]
+        }
+    },
     "scripts": {
         "lint": "pint --parallel",
         "lint:check": "pint --parallel --test",

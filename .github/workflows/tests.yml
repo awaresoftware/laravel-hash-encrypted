@@ -12,25 +12,26 @@ permissions:
 jobs:
   # Laravel and PHP compatibility. Deliberately not crossed with the driver
   # matrix below: the supported Laravel versions only need a cheap smoke run, and
-  # multiplying 3 versions by 4 databases would burn CI minutes re-testing the
-  # same driver behaviour.
+  # multiplying 2 versions by 4 databases would burn CI minutes re-testing the
+  # same driver behaviour. Together with the driver job (PHP 8.5) this covers
+  # every supported PHP version.
+  #
+  # Laravel 11 is not supported: every release is affected by unpatched security
+  # advisories, so Composer refuses to install it.
   compat:
-    name: Laravel ${{ matrix.testbench }} / PHP ${{ matrix.php }}
+    name: Laravel ${{ matrix.laravel }} / PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - testbench: '^9.0'
-            laravel: 11
-            php: '8.3'
           - testbench: '^10.0'
             laravel: 12
-            php: '8.4'
+            php: '8.3'
           - testbench: '^11.0'
             laravel: 13
-            php: '8.5'
+            php: '8.4'
 
     steps:
       - name: Checkout code

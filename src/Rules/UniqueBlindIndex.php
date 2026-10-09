@@ -59,7 +59,7 @@ class UniqueBlindIndex implements ValidationRule
         if ($this->ignoreModelKey !== null) {
             // whereKeyNot() only exists from Laravel 13.34 onwards, so the
             // portable equivalent is used to keep the package installable on
-            // Laravel 11 and 12 as well.
+            // Laravel 12 as well.
             $query->where($query->getModel()->getQualifiedKeyName(), '!=', $this->ignoreModelKey);
         }
 

@@ -12,6 +12,9 @@ Nothing yet.
 ## [0.1.0] — Unreleased
 
 Initial release, extracted from a working application implementation.
+Supports Laravel 12 and 13 on PHP 8.3+. Laravel 11 is not supported: every
+release is affected by unpatched security advisories, so Composer refuses to
+install it.
 
 ### Added
 

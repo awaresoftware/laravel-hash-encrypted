@@ -30,7 +30,7 @@ without invalidating every lookup.
 ## Requirements
 
 - PHP 8.3+ with the `intl` and `openssl` extensions
-- Laravel 11, 12 or 13
+- Laravel 12 or 13
 - Any of SQLite, PostgreSQL, MySQL 8.0.13+ or MariaDB
 
 ## Installation

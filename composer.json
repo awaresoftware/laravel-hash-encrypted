@@ -1,6 +1,6 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "aware/hash-encrypted",
+    "name": "awaresoftware/laravel-hash-encrypted",
     "description": "Searchable encrypted columns for Laravel: an HMAC blind index and an AES-256-GCM ciphertext packed into a single, indexable database value.",
     "keywords": [
         "laravel",
@@ -11,6 +11,9 @@
         "eloquent"
     ],
     "license": "MIT",
+    "support": {
+        "security": "https://github.com/awaresoftware/laravel-hash-encrypted/security/policy"
+    },
     "type": "library",
     "require": {
         "php": "^8.3",

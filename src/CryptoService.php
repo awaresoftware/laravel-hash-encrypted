@@ -518,7 +518,7 @@ class CryptoService
      */
     private function fieldKey(string $context): string
     {
-        return $this->fieldKeys[$context] ??= hash_hkdf('sha256', $this->hashKey(), 32, 'aware/hash-encrypted:blind-index:'.$context);
+        return $this->fieldKeys[$context] ??= hash_hkdf('sha256', $this->hashKey(), 32, 'awaresoftware/laravel-hash-encrypted:blind-index:'.$context);
     }
 
     /**

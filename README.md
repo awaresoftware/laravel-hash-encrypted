@@ -1,4 +1,4 @@
-# aware/hash-encrypted
+# awaresoftware/laravel-hash-encrypted
 
 Searchable, encrypted columns for Laravel.
 
@@ -36,7 +36,7 @@ without invalidating every lookup.
 ## Installation
 
 ```bash
-composer require aware/hash-encrypted
+composer require awaresoftware/laravel-hash-encrypted
 ```
 
 ### 1. Generate the keys

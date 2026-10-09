@@ -66,51 +66,45 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # An empty image skips the service container: SQLite runs in memory.
           - driver: sqlite
             username: ''
+            image: ''
+            port: 5432
+            health: ''
           - driver: mysql
             username: root
+            image: mysql:8.0
+            port: 3306
+            health: --health-cmd="mysqladmin ping"
           - driver: mariadb
             username: root
+            image: mariadb:11
+            port: 3306
+            health: --health-cmd="healthcheck.sh --connect --innodb_initialized"
           - driver: pgsql
             username: postgres
+            image: postgres:16
+            port: 5432
+            health: --health-cmd="pg_isready"
 
+    # Service containers do not accept "if:", so one service takes its image,
+    # port and health check from the matrix. Each image ignores the other
+    # images' variables.
     services:
-      mysql:
-        image: mysql:8.0
-        if: matrix.driver == 'mysql'
+      db:
+        image: ${{ matrix.image }}
         env:
           MYSQL_DATABASE: testing
           MYSQL_ROOT_PASSWORD: secret
-        ports: ['3306:3306']
-        options: >-
-          --health-cmd="mysqladmin ping"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
-
-      mariadb:
-        image: mariadb:11
-        if: matrix.driver == 'mariadb'
-        env:
           MARIADB_DATABASE: testing
           MARIADB_ROOT_PASSWORD: secret
-        ports: ['3306:3306']
-        options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
-
-      pgsql:
-        image: postgres:16
-        if: matrix.driver == 'pgsql'
-        env:
           POSTGRES_DB: testing
           POSTGRES_PASSWORD: secret
-        ports: ['5432:5432']
+        ports:
+          - ${{ matrix.port }}:${{ matrix.port }}
         options: >-
-          --health-cmd="pg_isready"
+          ${{ matrix.health }}
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10

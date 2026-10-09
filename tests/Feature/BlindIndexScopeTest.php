@@ -1,6 +1,5 @@
 <?php
 
-use Aware\HashEncrypted\CryptoService;
 use Aware\HashEncrypted\Database\BlindIndex;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\QueryException;
@@ -189,7 +188,7 @@ test('the blind index is always bound and never interpolated into the SQL text',
     // strategies: the blind index is a secret derived value, so it travels as a
     // parameter. Interpolating it would leak into query logs.
     $query = captureEncryptedLookup();
-    $blindIndex = app(CryptoService::class)->blindIndex('john@example.com');
+    $blindIndex = (new TestUser)->blindIndex('email', 'john@example.com');
 
     expect($query->sql)->not->toContain($blindIndex)
         ->and($query->bindings)->toHaveCount(1)
@@ -205,7 +204,7 @@ test('the expression strategy compares against the indexed expression', function
     $query = captureEncryptedLookup();
 
     expect($query->sql)->toContain(BlindIndex::expression($connection, 'email'))
-        ->and($query->bindings)->toBe([app(CryptoService::class)->blindIndex('john@example.com')]);
+        ->and($query->bindings)->toBe([(new TestUser)->blindIndex('email', 'john@example.com')]);
 });
 
 test('the prefix strategy compares with LIKE and binds the blind index as a prefix', function () {
@@ -218,7 +217,7 @@ test('the prefix strategy compares with LIKE and binds the blind index as a pref
     // The prefix index only gets used by the planner when the comparison is a
     // prefix LIKE, so the wildcard has to be part of the bound value.
     expect(strtolower($query->sql))->toContain('like')
-        ->and($query->bindings)->toBe([app(CryptoService::class)->blindIndex('john@example.com').'%']);
+        ->and($query->bindings)->toBe([(new TestUser)->blindIndex('email', 'john@example.com').'%']);
 });
 
 test('a malicious value cannot break out of the blind index comparison', function () {

@@ -4,6 +4,7 @@ use Aware\HashEncrypted\Auth\HashEncryptedUserProvider;
 use Aware\HashEncrypted\CryptoService;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Tests\HashEncrypted\Fixtures\TestUser;
 
@@ -134,3 +135,17 @@ test('the provider still validates a password through the hasher', function () {
         ->and($this->provider->validateCredentials($found, ['password' => 'password']))->toBeTrue()
         ->and($this->provider->validateCredentials($found, ['password' => 'wrong']))->toBeFalse();
 });
+
+/*
+|--------------------------------------------------------------------------
+| Security regressions
+|--------------------------------------------------------------------------
+*/
+
+test('an encrypted credential that is not a string never falls back to a plaintext comparison', function (mixed $value) {
+    // Null became "where email is null" against the packed column.
+    DB::enableQueryLog();
+
+    expect($this->provider->retrieveByCredentials(['email' => $value]))->toBeNull()
+        ->and(DB::getQueryLog())->toBe([]);
+})->with([[null], [true], [false]])->group('security');

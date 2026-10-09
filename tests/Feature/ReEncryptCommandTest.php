@@ -3,6 +3,7 @@
 use Aware\HashEncrypted\Console\ReEncryptCommand;
 use Aware\HashEncrypted\CryptoService;
 use Illuminate\Console\Command;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Tests\HashEncrypted\Fixtures\TestUser;
@@ -177,3 +178,30 @@ test('an empty table is not an error', function () {
 
     $this->artisan('crypto:re-encrypt')->assertSuccessful();
 });
+
+/*
+|--------------------------------------------------------------------------
+| Security regressions
+|--------------------------------------------------------------------------
+*/
+
+test('a value changed while the command runs is not overwritten', function () {
+    withPreviousKey();
+
+    // Simulate a concurrent request that changes the address right after
+    // the command has read its chunk, before it writes the re-encrypted value.
+    $changed = false;
+
+    DB::listen(function (QueryExecuted $query) use (&$changed) {
+        if (! $changed && str_starts_with($query->sql, 'select') && str_contains($query->sql, 'test_users')) {
+            $changed = true;
+            $this->user->fresh()->update(['email' => 'changed@example.com']);
+        }
+    });
+
+    $this->artisan('crypto:re-encrypt')
+        ->expectsOutputToContain('1 changed concurrently')
+        ->assertSuccessful();
+
+    expect($this->user->fresh()->email)->toBe('changed@example.com');
+})->group('security');

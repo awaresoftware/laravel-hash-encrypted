@@ -156,3 +156,23 @@ test('the database constraint rejects what validation can only warn about', func
 
     expect(TestUser::count())->toBe(1);
 });
+
+/*
+|--------------------------------------------------------------------------
+| Security regressions
+|--------------------------------------------------------------------------
+*/
+
+test('the rule checks non string scalars exactly as the cast stores them', function () {
+    // A JSON number used to pass as "unique" without a query, while the
+    // cast stringified and stored it.
+    TestUser::create(['name' => '12345', 'email' => 'numbers@example.com', 'password' => 'password']);
+
+    $rule = new UniqueBlindIndex(TestUser::class, 'name');
+
+    expect($rule->violates(12345))->toBeTrue()
+        ->and($rule->violates(12345.0))->toBeTrue()
+        ->and($rule->violates(12345.5))->toBeFalse()
+        ->and($rule->violates(54321))->toBeFalse()
+        ->and(Validator::make(['name' => 12345], ['name' => [$rule]])->fails())->toBeTrue();
+})->group('security');

@@ -74,7 +74,14 @@ class HashEncryptedUserProvider extends EloquentUserProvider
                 $query->whereIn($key, $values);
             } elseif ($value instanceof Closure) {
                 $value($query);
-            } elseif (BlindIndex::isEncryptedField($this->model, $key) && (is_string($value) || is_numeric($value))) {
+            } elseif (BlindIndex::isEncryptedField($this->model, $key)) {
+                // An encrypted column only ever compares blind indexes: any
+                // other value would be a plaintext comparison against the
+                // packed column, such as "where email is null".
+                if (! is_string($value) && ! is_int($value) && ! is_float($value)) {
+                    return null;
+                }
+
                 BlindIndex::where($query, $this->model, $key, (string) $value);
             } else {
                 $query->where($key, $value);

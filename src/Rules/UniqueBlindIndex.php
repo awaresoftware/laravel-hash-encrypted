@@ -5,6 +5,7 @@ namespace Aware\HashEncrypted\Rules;
 use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Support\Str;
+use Stringable;
 
 /**
  * Validates that no other row holds the given plaintext in a hash encrypted column.
@@ -31,7 +32,7 @@ class UniqueBlindIndex implements ValidationRule
     /**
      * Run the validation rule.
      */
-    public function validate(string $attribute, mixed $value, Closure $fail): void
+    public function validate(string $attribute, #[\SensitiveParameter] mixed $value, Closure $fail): void
     {
         if ($this->violates($value)) {
             $fail(__('validation.unique', ['attribute' => Str::snake($attribute)]));
@@ -41,8 +42,14 @@ class UniqueBlindIndex implements ValidationRule
     /**
      * Determine whether another row already stores the given plaintext.
      */
-    public function violates(mixed $value): bool
+    public function violates(#[\SensitiveParameter] mixed $value): bool
     {
+        // Coerce exactly as the Encrypted cast does, so a JSON number is checked
+        // against the string the cast would store for it.
+        if (is_scalar($value) || $value instanceof Stringable) {
+            $value = (string) $value;
+        }
+
         if (! is_string($value) || $value === '') {
             return false;
         }

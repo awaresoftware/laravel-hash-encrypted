@@ -27,6 +27,16 @@ return new class extends Migration
         });
 
         $this->createBlindIndexes('test_users', ['email' => true, 'name' => false]);
+
+        // A second table with a same-named encrypted column, used to prove that
+        // blind indexes and ciphertexts are bound to their table.
+        Schema::create('test_contacts', function (Blueprint $table) {
+            $table->id();
+            $table->text('email');
+            $table->timestamps();
+        });
+
+        $this->createBlindIndexes('test_contacts', ['email' => true]);
     }
 
     /**
@@ -34,6 +44,7 @@ return new class extends Migration
      */
     public function down(): void
     {
+        Schema::dropIfExists('test_contacts');
         Schema::dropIfExists('test_users');
     }
 };

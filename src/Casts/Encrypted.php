@@ -61,7 +61,7 @@ final class Encrypted implements Castable, CastsAttributes
      * because callers such as the profile form check isDirty('email') to decide
      * whether the address changed and has to be verified again.
      */
-    public function set(Model $model, string $key, mixed $value, array $attributes): ?string
+    public function set(Model $model, string $key, #[\SensitiveParameter] mixed $value, array $attributes): ?string
     {
         if ($value === null) {
             return null;
@@ -78,11 +78,11 @@ final class Encrypted implements Castable, CastsAttributes
     }
 
     /**
-     * Build the additional authenticated data that binds a ciphertext to its column.
+     * Build the field context that binds a packed value to its table and column.
      */
     protected function context(Model $model, string $column): string
     {
-        return $this->crypto->context($model::class, $column);
+        return $this->crypto->context($model::class, $model->getTable(), $column);
     }
 
     /**
@@ -90,7 +90,7 @@ final class Encrypted implements Castable, CastsAttributes
      *
      * @throws InvalidArgumentException
      */
-    protected function stringValue(Model $model, string $column, mixed $value): string
+    protected function stringValue(Model $model, string $column, #[\SensitiveParameter] mixed $value): string
     {
         if (is_string($value)) {
             return $value;

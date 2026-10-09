@@ -5,6 +5,7 @@ use Aware\HashEncrypted\CryptoService;
 use Aware\HashEncrypted\Exceptions\DecryptionFailed;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Support\Facades\DB;
+use Tests\HashEncrypted\Fixtures\TestContact;
 use Tests\HashEncrypted\Fixtures\TestUser;
 
 /*
@@ -51,7 +52,7 @@ test('the plaintext is not stored in the database', function () {
 
     $row = (array) DB::table('test_users')->first();
 
-    expect($row['email'])->toStartWith(app(CryptoService::class)->blindIndex('john@example.com'))
+    expect($row['email'])->toStartWith((new TestUser)->blindIndex('email', 'john@example.com'))
         ->and($row['email'])->not->toContain('john@example.com')
         ->and($row['name'])->not->toContain('John Doe');
 });
@@ -199,3 +200,30 @@ test('the cast is not an eloquent attribute object', function () {
     // Attribute-based implementation, which would change the semantics.
     expect(new Encrypted(app(CryptoService::class)))->not->toBeInstanceOf(Attribute::class);
 });
+
+/*
+|--------------------------------------------------------------------------
+| Security regressions
+|--------------------------------------------------------------------------
+*/
+
+test('the same value stores unrelated blind indexes in different tables', function () {
+    $user = TestUser::create(['name' => 'John Doe', 'email' => 'john@example.com', 'password' => 'password']);
+    $contact = TestContact::create(['email' => 'john@example.com']);
+
+    // A shared prefix would let a database dump join the two tables.
+    expect(substr($user->getRawOriginal('email'), 0, 64))
+        ->not->toBe(substr($contact->getRawOriginal('email'), 0, 64))
+        ->and(TestUser::whereEncrypted('email', 'john@example.com')->sole()->is($user))->toBeTrue()
+        ->and(TestContact::whereEncrypted('email', 'john@example.com')->sole()->is($contact))->toBeTrue();
+})->group('security');
+
+test('a ciphertext copied into a same-named column of another table cannot be read', function () {
+    $user = TestUser::create(['name' => 'John Doe', 'email' => 'john@example.com', 'password' => 'password']);
+    $contact = TestContact::create(['email' => 'someone@example.com']);
+
+    // The default additional authenticated data named the column only.
+    DB::table('test_contacts')->where('id', $contact->id)->update(['email' => $user->getRawOriginal('email')]);
+
+    expect(fn () => $contact->fresh()->email)->toThrow(DecryptionFailed::class);
+})->group('security');

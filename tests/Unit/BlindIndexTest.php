@@ -77,16 +77,24 @@ test('the column is left unqualified so the planner matches the indexed expressi
 });
 
 test('the expression follows the configured blind index length', function () {
-    config(['crypto.blind_index_length' => 32]);
+    configureCrypto(['crypto.hash_algorithm' => 'sha512', 'crypto.blind_index_length' => 128]);
 
     expect(BlindIndex::expression(blindIndexConnection('sqlite'), 'email'))
-        ->toBe('substr("email", 1, 32)');
+        ->toBe('substr("email", 1, 128)');
 });
 
-test('a blind index length below 32 is rejected', function () {
-    config(['crypto.blind_index_length' => 16]);
+test('a blind index length that does not match the algorithm never reaches the DDL', function () {
+    // A mismatched prefix index would cover random ciphertext bytes.
+    configureCrypto(['crypto.blind_index_length' => 96]);
 
-    expect(fn () => BlindIndex::length())->toThrow(InvalidArgumentException::class);
+    expect(fn () => BlindIndex::createIndexStatements(blindIndexConnection('sqlite'), 'users', ['email' => true]))
+        ->toThrow(RuntimeException::class, 'must equal');
+})->group('security');
+
+test('a blind index length below 32 is rejected', function () {
+    configureCrypto(['crypto.blind_index_length' => 16]);
+
+    expect(fn () => BlindIndex::length())->toThrow(RuntimeException::class, 'must equal');
 });
 
 /*
@@ -127,7 +135,7 @@ test('the prefix index is exactly as wide as the blind index, so it stays unique
 
     expect($statement)->toContain('`email`(64)')
         ->and($statement)->toContain('UNIQUE')
-        ->and(strlen($crypto->blindIndex('john@example.com')))->toBe(64);
+        ->and(strlen($crypto->blindIndex('john@example.com', 'users.email')))->toBe(64);
 });
 
 test('one statement is returned per column', function () {

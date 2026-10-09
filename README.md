@@ -29,7 +29,7 @@ without invalidating every lookup.
 
 ## Requirements
 
-- PHP 8.3+
+- PHP 8.3+ with the `intl` and `openssl` extensions
 - Laravel 11, 12 or 13
 - Any of SQLite, PostgreSQL, MySQL 8.0.13+ or MariaDB
 
@@ -239,6 +239,12 @@ is derived from the plaintext alone. Every lookup keeps working throughout.
 The command exits non-zero and lists unresolved records if any value cannot be
 decrypted. Do not remove a previous key until it reports success.
 
+Reusing a key id is rejected at boot: a previous key with the same id as the
+active key would otherwise replace it silently, and the rotation would report
+success without rotating anything. The command also never overwrites a value
+the application changed while it was running; such rows are reported as
+"changed concurrently" and are already written with the active key.
+
 `CRYPTO_HASH_KEY` is rotated differently, and much more painfully: changing it
 changes every blind index, which makes existing rows unfindable. Rotation
 requires re-encrypting and re-indexing the whole table, so plan it as a
@@ -250,26 +256,35 @@ maintenance operation rather than a routine one.
 
 **An attacker with read access to the database, without `CRYPTO_HASH_KEY`, learns:**
 
-- which rows share a value (the blind index is deterministic), so duplicate
-  counts and equality classes
+- which rows of one column share a value (the blind index is deterministic
+  within a column), so duplicate counts and equality classes
 - the ciphertext length, which bounds the plaintext length
 - nothing else
 
 **They do not learn** the plaintext, the ordering of values (the sort key is the
 blind index, so `ORDER BY email` is effectively random), or whether two
-different columns hold the same value — unless they can also query them through
-the application.
+different columns or tables hold the same value: the blind index key is derived
+per table and column, so `users.email` and `contacts.email` store unrelated
+blind indexes for the same address.
 
 **Assumptions and limits:**
 
 - The blind index key must stay secret. A plain SHA-256 of an email address is
-  trivially reversible with a word list; an HMAC under a secret is not.
+  trivially reversible with a word list; an HMAC under a secret is not. It must
+  also differ from the encryption keys and `APP_KEY`, which is enforced.
 - Do not index low entropy values or values whose *existence* is itself
   sensitive (tokens, account identifiers). Equality is still exposed.
-- `DecryptionFailed` never reveals which step failed or what the value was, so
-  error messages, logs and stack traces do not leak plaintext.
-- AAD binds each ciphertext to its column, so a value cannot be moved to another
-  column and still decrypt.
+- `DecryptionFailed` never reveals which step failed or what the value was, and
+  every parameter that carries plaintext, a packed value or a key is marked
+  `#[\SensitiveParameter]`, so error messages, logs and stack traces do not
+  leak plaintext.
+- The field context (`{table}.{column}` by default) is the AAD of every
+  ciphertext, so a value cannot be moved to another column or table and still
+  decrypt. Unpacking also checks that the blind index belongs to the decrypted
+  plaintext, so the two halves of a packed value cannot be mixed.
+- Ciphertexts are not bound to their row: an attacker who can **write** to the
+  database can still copy a value from one row to another row of the same
+  column. Keep the database account least-privilege.
 
 ### Fortify and password resets
 
@@ -279,7 +294,7 @@ of `password_reset_tokens`, return the blind index from the model:
 ```php
 public function getEmailForPasswordReset(): string
 {
-    return $this->blindIndex((string) $this->email);
+    return $this->blindIndex('email', (string) $this->email);
 }
 ```
 
@@ -303,7 +318,8 @@ ResetPassword::createUrlUsing(function (CanResetPassword $notifiable, string $to
 
 Fortify's login throttle key is built from the submitted identifier and persisted
 in the cache store, which would otherwise hold every attempted address in
-plaintext. Derive it from the blind index instead:
+plaintext. Derive it from a blind index instead. Giving it its own context keeps
+the cache keys unrelated to the blind indexes stored in `users.email`:
 
 ```php
 use Aware\HashEncrypted\CryptoService;
@@ -316,7 +332,7 @@ class HashEncryptedLoginRateLimiter extends LoginRateLimiter
         $identifier = $request->input(Fortify::username());
 
         $blindIndex = is_string($identifier) && $identifier !== ''
-            ? app(CryptoService::class)->blindIndex($identifier)
+            ? app(CryptoService::class)->blindIndex($identifier, 'login-throttle')
             : '';
 
         return $blindIndex.'|'.$request->ip();
@@ -340,11 +356,11 @@ php artisan vendor:publish --tag=hash-encrypted-config
 | `encryption_key` | `null` | Base64 32 byte AES-256-GCM key. |
 | `previous_encryption_keys` | `[]` | `"id:key"` pairs, comma separated. |
 | `hash_key` | `null` | Base64 32 byte key behind the blind index. |
-| `hash_algorithm` | `sha256` | HMAC algorithm for the blind index. |
+| `hash_algorithm` | `sha256` | HMAC algorithm for the blind index: `sha256`, `sha384`, `sha512` or `sha3-*`. |
 | `cipher` | `aes-256-gcm` | Must stay `aes-256-gcm` so tampering is detected. |
-| `blind_index_length` | `64` | Leading characters reserved for the blind index. Minimum `32`. |
+| `blind_index_length` | `64` | Leading characters reserved for the blind index. Must equal the HMAC's hex length. |
 | `version` | `1` | Envelope version. Raise only when the layout changes. |
-| `aad` | `{column}` | Additional authenticated data template, supports `{model}` and `{column}`. |
+| `aad` | `{table}.{column}` | Field context template: the AAD and the blind index key domain. Supports `{table}`, `{model}` and `{column}`; `{column}` is required. |
 | `fields` | `[]` | Which attributes are stored encrypted, keyed by model class. |
 | `blind_index_strategy` | `auto` | `auto`, `expression` or `prefix_like`. |
 

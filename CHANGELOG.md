@@ -40,8 +40,28 @@ Initial release, extracted from a working application implementation.
 
 - The blind index is an HMAC under `CRYPTO_HASH_KEY`, not a bare hash, so a
   database dump cannot be reversed with a word list.
-- `DecryptionFailed` never reports which step failed or what the value was.
-- The ciphertext is bound to its column through additional authenticated data.
+- The blind index key is derived per field (HKDF over `CRYPTO_HASH_KEY` and
+  the field context), so the same value in two tables or columns produces
+  unrelated blind indexes and a database dump cannot join them.
+- `DecryptionFailed` never reports which step failed or what the value was, and
+  every parameter carrying plaintext, a packed value or a key is marked
+  `#[\SensitiveParameter]`.
+- The ciphertext is bound to its table and column through additional
+  authenticated data (`{table}.{column}` by default), and unpacking verifies
+  that the blind index belongs to the decrypted plaintext.
+- Key configuration fails closed: reused or out of range key ids, a missing
+  active key, a blind index key equal to an encryption key or `APP_KEY`, an
+  HMAC algorithm outside the allowlist, and a `blind_index_length` that differs
+  from the HMAC length are all rejected.
+- `crypto:re-encrypt` writes compare-and-swap, so it never reverts a value the
+  application changed while it ran.
+- `UniqueBlindIndex` checks non string scalars as the cast stores them, and the
+  user provider never compares an encrypted column with a non string value.
+- `ext-intl` and `ext-openssl` are required, so every host normalizes values
+  identically before blinding them.
+- Data written by the application this package was extracted from uses a
+  column-only context and a shared blind index key. It has to be re-encrypted
+  and re-indexed before it can be read by this release.
 - The package config is merged **recursively**, so an application that
   published `config/crypto.php` keeps receiving new default keys on upgrade
   instead of silently losing them to a shallow `array_merge`.

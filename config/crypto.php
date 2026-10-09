@@ -54,8 +54,9 @@ return [
     | The searchable prefix of a hash encrypted attribute is an HMAC of the
     | plaintext, keyed with this secret. A plain SHA-256 hash of an email
     | address is trivially reversible with a word list, so this key must be
-    | treated as a secret, kept separate from the encryption key, and backed
-    | up with the rest of your application secrets. Losing it makes every
+    | treated as a secret, kept separate from the encryption keys and APP_KEY
+    | (both are enforced), and backed up with the rest of your application
+    | secrets. A separate key is derived from it for every column. Losing it makes every
     | stored value unrecoverable and unsearchable.
     |
     | Generate it with:
@@ -71,12 +72,14 @@ return [
     | Cryptographic Parameters
     |--------------------------------------------------------------------------
     |
-    | - "hash_algorithm" is the HMAC algorithm behind the blind index.
+    | - "hash_algorithm" is the HMAC algorithm behind the blind index: one of
+    |   sha256, sha384, sha512, sha3-256, sha3-384 or sha3-512.
     | - "cipher" must be an authenticated cipher, GCM is required so that a
     |   tampered ciphertext is detected during decryption.
     | - "blind_index_length" is the number of leading characters reserved for
-    |   the blind index inside a packed value. A hex encoded SHA-256 HMAC is
-    |   64 characters long.
+    |   the blind index inside a packed value. It must equal the hex length of
+    |   the HMAC: 64 for sha256 and sha3-256, 96 for the 384 bit algorithms,
+    |   128 for the 512 bit ones.
     | - "version" is the envelope version written into every packed value. It
     |   must be raised whenever the envelope layout changes, which makes old
     |   values fail loudly instead of silently.
@@ -93,19 +96,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Additional Authenticated Data
+    | Field Context
     |--------------------------------------------------------------------------
     |
-    | The AAD is authenticated but not encrypted. It binds a ciphertext to the
-    | column it belongs to, so an encrypted value cannot be moved to another
-    | column and still decrypt. Both "{model}" and "{column}" placeholders
-    | are supported. The default only uses the column name because renaming a
-    | column or a model would otherwise make existing values unreadable; add
-    | "{model}" if you prefer the stronger binding and accept the coupling.
+    | Every hash encrypted column has a context built from this template. It
+    | is the additional authenticated data of the ciphertext, and the domain
+    | its blind index key is derived for. A packed value therefore cannot be
+    | moved to another column or table and still decrypt, and the same value
+    | stored in two columns produces unrelated blind indexes.
+    |
+    | The "{table}", "{column}" and "{model}" placeholders are supported, and
+    | "{column}" is required. The default uses the table rather than the model
+    | class, so renaming a class does not make existing values unreadable.
+    | Renaming a table or a column does: re-encrypt the data when you do.
     |
     */
 
-    'aad' => '{column}',
+    'aad' => '{table}.{column}',
 
     /*
     |--------------------------------------------------------------------------

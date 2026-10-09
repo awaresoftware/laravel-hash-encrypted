@@ -6,6 +6,7 @@ use Aware\HashEncrypted\HashEncryptedServiceProvider;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Foundation\Application;
 use Orchestra\Testbench\TestCase as Orchestra;
+use Tests\HashEncrypted\Fixtures\TestContact;
 use Tests\HashEncrypted\Fixtures\TestUser;
 
 abstract class TestCase extends Orchestra
@@ -39,6 +40,7 @@ abstract class TestCase extends Orchestra
         $app['config']->set('crypto.hash_key', 'base64:'.base64_encode(str_repeat('b', 32)));
         $app['config']->set('crypto.fields', [
             TestUser::class => ['email', 'name'],
+            TestContact::class => ['email'],
         ]);
 
         $app['config']->set('auth.providers.users', [

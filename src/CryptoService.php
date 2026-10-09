@@ -19,12 +19,17 @@ use RuntimeException;
  *   └──────────────────────────────────────────────────────────────┘
  *
  * The blind index is an HMAC of the normalized plaintext, keyed with a
- * secret, so it can be compared for equality (and indexed) without ever
- * storing the plaintext.
+ * secret derived per field from the blind index key, so it can be compared for
+ * equality (and indexed) without ever storing the plaintext, and the same
+ * value produces unrelated blind indexes in different tables and columns.
  *
  * The envelope holds the plaintext encrypted with AES-256-GCM:
  *
  *   version (1 byte) │ key id (2 bytes) │ nonce (12 bytes) │ ciphertext │ tag (16 bytes)
+ *
+ * The envelope is authenticated with the field context as additional
+ * authenticated data, and unpacking checks that the blind index in front of it
+ * belongs to the decrypted plaintext, so neither half can be swapped on its own.
  *
  * Version and key id live inside the base64 payload so that the leading
  * blind index keeps a fixed width and stays indexable, while still allowing
@@ -49,6 +54,11 @@ class CryptoService
     private const TAG_BYTES = 16;
 
     /**
+     * HMAC algorithms allowed for the blind index.
+     */
+    private const HASH_ALGORITHMS = ['sha256', 'sha384', 'sha512', 'sha3-256', 'sha3-384', 'sha3-512'];
+
+    /**
      * The active key id mapped to its decoded 32 byte key.
      *
      * @var array<int, string>
@@ -59,6 +69,25 @@ class CryptoService
      * The id of the key new values are encrypted with.
      */
     private readonly int $activeKeyId;
+
+    /**
+     * The validated HMAC algorithm and blind index length, resolved on first use.
+     *
+     * @var array{string, int}|null
+     */
+    private ?array $blindIndexSettings = null;
+
+    /**
+     * The validated blind index key, resolved on first use.
+     */
+    private ?string $hashKey = null;
+
+    /**
+     * The blind index keys derived so far, keyed by field context.
+     *
+     * @var array<string, string>
+     */
+    private array $fieldKeys = [];
 
     /**
      * Create a new crypto service instance.
@@ -72,40 +101,53 @@ class CryptoService
     }
 
     /**
-     * Get the blind index for the given plaintext.
+     * Get the blind index for the given plaintext in the given field.
      *
      * Two values that normalize to the same input always produce the same
-     * blind index, which is what makes the packed column searchable.
+     * blind index within one field, which is what makes the packed column
+     * searchable. The HMAC key is derived per field, so the same value in two
+     * different fields produces unrelated blind indexes.
+     *
+     * @param  string  $context  The field context, see context().
      */
-    public function blindIndex(string $value): string
+    public function blindIndex(#[\SensitiveParameter] string $value, string $context): string
     {
-        return hash_hmac(
-            $this->hashAlgorithm(),
-            $this->normalize($value),
-            $this->hashKey(),
-        );
+        [$algorithm] = $this->blindIndexSettings();
+
+        return hash_hmac($algorithm, $this->normalize($value), $this->fieldKey($context));
     }
 
     /**
      * Pack a plaintext value into a searchable, encrypted string.
      *
-     * @param  string  $context  Additional authenticated data, usually the column name.
+     * @param  string  $context  The field context, see context().
      */
-    public function pack(string $plaintext, string $context = ''): string
+    public function pack(#[\SensitiveParameter] string $plaintext, string $context): string
     {
-        return $this->blindIndex($plaintext).$this->encrypt($plaintext, $context);
+        return $this->blindIndex($plaintext, $context).$this->encrypt($plaintext, $context);
     }
 
     /**
      * Unpack a value previously produced by pack().
      *
-     * @param  string  $context  Additional authenticated data, usually the column name.
+     * The blind index in front of the envelope is not covered by the
+     * authentication tag, so it is recomputed from the decrypted plaintext and
+     * compared: a row cannot carry one value's blind index and another value's
+     * ciphertext.
+     *
+     * @param  string  $context  The field context, see context().
      *
      * @throws DecryptionFailed
      */
-    public function unpack(string $packed, string $context = ''): string
+    public function unpack(#[\SensitiveParameter] string $packed, string $context): string
     {
-        return $this->decrypt($this->cipherText($packed), $context);
+        $plaintext = $this->decrypt($this->cipherText($packed), $context);
+
+        if (! hash_equals(substr($packed, 0, $this->blindIndexLength()), $this->blindIndex($plaintext, $context))) {
+            throw DecryptionFailed::unauthenticated();
+        }
+
+        return $plaintext;
     }
 
     /**
@@ -116,7 +158,7 @@ class CryptoService
      *
      * @throws DecryptionFailed
      */
-    public function repack(string $packed, string $context = ''): string
+    public function repack(#[\SensitiveParameter] string $packed, string $context): string
     {
         return $this->pack($this->unpack($packed, $context), $context);
     }
@@ -129,9 +171,9 @@ class CryptoService
      * this to keep the stored value untouched, which in turn keeps the model
      * clean of spurious changes.
      */
-    public function isUnchanged(string $packed, string $plaintext, string $context = ''): bool
+    public function isUnchanged(#[\SensitiveParameter] string $packed, #[\SensitiveParameter] string $plaintext, string $context): bool
     {
-        if (! str_starts_with($packed, $this->blindIndex($plaintext))) {
+        if (! str_starts_with($packed, $this->blindIndex($plaintext, $context))) {
             return false;
         }
 
@@ -147,7 +189,7 @@ class CryptoService
      *
      * @throws DecryptionFailed
      */
-    public function keyIdOf(string $packed): int
+    public function keyIdOf(#[\SensitiveParameter] string $packed): int
     {
         $raw = base64_decode($this->cipherText($packed), true);
 
@@ -163,29 +205,37 @@ class CryptoService
      *
      * @throws DecryptionFailed
      */
-    public function usesActiveKey(string $packed): bool
+    public function usesActiveKey(#[\SensitiveParameter] string $packed): bool
     {
         return $this->keyIdOf($packed) === $this->activeKeyId;
     }
 
     /**
-     * Build the additional authenticated data for a model column.
+     * Build the field context for a model column.
+     *
+     * The context is the additional authenticated data of the envelope and the
+     * domain the blind index key is derived for, so it binds both halves of a
+     * packed value to the field it belongs to.
      *
      * @param  class-string  $modelClass
+     *
+     * @throws RuntimeException When the template does not name the column.
      */
-    public function context(string $modelClass, string $column): string
+    public function context(string $modelClass, string $table, string $column): string
     {
-        return str_replace(
-            ['{model}', '{column}'],
-            [$modelClass, $column],
-            (string) Config::get('crypto.aad', '{column}'),
-        );
+        $template = (string) Config::get('crypto.aad', '{table}.{column}');
+
+        if (! str_contains($template, '{column}')) {
+            throw new RuntimeException('The crypto aad template must contain {column}, so that every column gets its own context.');
+        }
+
+        return str_replace(['{model}', '{table}', '{column}'], [$modelClass, $table, $column], $template);
     }
 
     /**
      * Encrypt a plaintext value into a base64 encoded envelope.
      */
-    private function encrypt(string $plaintext, string $context): string
+    private function encrypt(#[\SensitiveParameter] string $plaintext, string $context): string
     {
         $keyId = $this->activeKeyId;
         $nonce = random_bytes(self::NONCE_BYTES);
@@ -214,7 +264,7 @@ class CryptoService
      *
      * @throws DecryptionFailed
      */
-    private function decrypt(string $encoded, string $context): string
+    private function decrypt(#[\SensitiveParameter] string $encoded, string $context): string
     {
         $raw = base64_decode($encoded, true);
 
@@ -254,7 +304,7 @@ class CryptoService
      *
      * @throws DecryptionFailed
      */
-    private function keyIdFromEnvelope(string $raw): int
+    private function keyIdFromEnvelope(#[\SensitiveParameter] string $raw): int
     {
         if (strlen($raw) < self::HEADER_BYTES) {
             throw DecryptionFailed::malformed();
@@ -274,7 +324,7 @@ class CryptoService
      *
      * @throws DecryptionFailed
      */
-    private function cipherText(string $packed): string
+    private function cipherText(#[\SensitiveParameter] string $packed): string
     {
         $length = $this->blindIndexLength();
 
@@ -289,14 +339,12 @@ class CryptoService
      * Normalize a value before it is blinded, so that lookups stay case and
      * whitespace insensitive.
      */
-    private function normalize(string $value): string
+    private function normalize(#[\SensitiveParameter] string $value): string
     {
         $normalized = mb_strtolower(trim($value));
 
-        if (! class_exists(Normalizer::class)) {
-            return $normalized;
-        }
-
+        // ext-intl is a hard requirement: skipping NFC on some hosts would give
+        // composed and decomposed input different blind indexes there.
         return Normalizer::normalize($normalized, Normalizer::FORM_C) ?: $normalized;
     }
 
@@ -309,25 +357,43 @@ class CryptoService
      */
     private function resolveKeyring(): array
     {
-        $keyring = [];
         $activeKey = Config::get('crypto.encryption_key');
 
-        if (is_string($activeKey) && $activeKey !== '') {
-            $keyring[$this->resolveActiveKeyId()] = $this->decodeKey($activeKey, 'CRYPTO_ENCRYPTION_KEY');
+        if (! is_string($activeKey) || $activeKey === '') {
+            throw new RuntimeException($this->missingKeyMessage('CRYPTO_ENCRYPTION_KEY'));
         }
+
+        $keyring = [$this->resolveActiveKeyId() => $this->decodeKey($activeKey, 'CRYPTO_ENCRYPTION_KEY')];
 
         foreach ((array) Config::get('crypto.previous_encryption_keys', []) as $entry) {
             [$keyId, $key] = array_pad(explode(':', (string) $entry, 2), 2, null);
 
-            if (! is_numeric($keyId) || ! is_string($key) || $key === '') {
+            if (! is_string($keyId) || ! ctype_digit($keyId) || ! is_string($key) || $key === '') {
                 throw new RuntimeException('CRYPTO_PREVIOUS_KEYS must be a comma separated list of "keyId:key" pairs.');
             }
 
-            $keyring[(int) $keyId] = $this->decodeKey($key, 'CRYPTO_PREVIOUS_KEYS');
+            $keyId = (int) $keyId;
+
+            if ($keyId > 65535) {
+                throw new RuntimeException('Every key id in CRYPTO_PREVIOUS_KEYS must be between 0 and 65535.');
+            }
+
+            // A reused id would silently replace a key: the active key would be
+            // swapped for an old one, and a rotation would report success
+            // without rotating anything.
+            if (isset($keyring[$keyId])) {
+                throw new RuntimeException("The key id [{$keyId}] is used more than once. Give every key in CRYPTO_ENCRYPTION_KEY_ID and CRYPTO_PREVIOUS_KEYS its own id.");
+            }
+
+            $keyring[$keyId] = $this->decodeKey($key, 'CRYPTO_PREVIOUS_KEYS');
         }
 
-        if ($keyring === []) {
-            throw new RuntimeException($this->missingKeyMessage('CRYPTO_ENCRYPTION_KEY'));
+        $appKey = $this->appKey();
+
+        foreach ($keyring as $key) {
+            if ($appKey !== null && hash_equals($appKey, $key)) {
+                throw new RuntimeException('The crypto encryption keys must be separate keys: none of them may equal APP_KEY.');
+            }
         }
 
         return $keyring;
@@ -338,7 +404,7 @@ class CryptoService
      *
      * @throws RuntimeException
      */
-    private function decodeKey(string $key, string $variable): string
+    private function decodeKey(#[\SensitiveParameter] string $key, string $variable): string
     {
         $decoded = base64_decode(str_starts_with($key, 'base64:') ? substr($key, 7) : $key, true);
 
@@ -402,47 +468,101 @@ class CryptoService
     }
 
     /**
-     * Get the configured HMAC algorithm.
+     * Get the number of characters reserved for the blind index.
+     *
+     * @throws RuntimeException When it differs from the length of the configured HMAC.
      */
-    private function hashAlgorithm(): string
+    public function blindIndexLength(): int
     {
+        return $this->blindIndexSettings()[1];
+    }
+
+    /**
+     * Get the validated HMAC algorithm and blind index length.
+     *
+     * The length must be exactly the hex length of the HMAC: a shorter
+     * reservation would cut the blind index, and a longer one would pull random
+     * ciphertext into the indexed prefix, where lookups never match and the
+     * unique index enforces nothing.
+     *
+     * @return array{string, int}
+     *
+     * @throws RuntimeException
+     */
+    private function blindIndexSettings(): array
+    {
+        if ($this->blindIndexSettings !== null) {
+            return $this->blindIndexSettings;
+        }
+
         $algorithm = (string) Config::get('crypto.hash_algorithm', 'sha256');
 
-        if (! in_array($algorithm, hash_hmac_algos(), true)) {
-            throw new RuntimeException("The [{$algorithm}] hash algorithm is not supported by this PHP installation.");
+        if (! in_array($algorithm, self::HASH_ALGORITHMS, true)) {
+            throw new RuntimeException("The [{$algorithm}] hash algorithm is not allowed for the blind index. Use one of: ".implode(', ', self::HASH_ALGORITHMS).'.');
         }
 
-        return $algorithm;
-    }
-
-    /**
-     * Get the number of characters reserved for the blind index.
-     */
-    private function blindIndexLength(): int
-    {
         $length = (int) Config::get('crypto.blind_index_length', 64);
+        $expected = strlen(hash($algorithm, ''));
 
-        if ($length < 32) {
-            throw new RuntimeException('The crypto blind index length must be at least 32 characters.');
+        if ($length !== $expected) {
+            throw new RuntimeException("The crypto blind index length [{$length}] must equal the length of a hex encoded [{$algorithm}] HMAC, which is {$expected} characters.");
         }
 
-        return $length;
+        return $this->blindIndexSettings = [$algorithm, $length];
     }
 
     /**
-     * Get the key used to blind values.
+     * Get the blind index key derived for the given field.
+     *
+     * @throws RuntimeException
+     */
+    private function fieldKey(string $context): string
+    {
+        return $this->fieldKeys[$context] ??= hash_hkdf('sha256', $this->hashKey(), 32, 'aware/hash-encrypted:blind-index:'.$context);
+    }
+
+    /**
+     * Get the validated key the field keys are derived from.
      *
      * @throws RuntimeException
      */
     private function hashKey(): string
     {
+        if ($this->hashKey !== null) {
+            return $this->hashKey;
+        }
+
         $key = Config::get('crypto.hash_key');
 
         if (! is_string($key) || $key === '') {
             throw new RuntimeException($this->missingKeyMessage('CRYPTO_HASH_KEY'));
         }
 
-        return $this->decodeKey($key, 'CRYPTO_HASH_KEY');
+        $decoded = $this->decodeKey($key, 'CRYPTO_HASH_KEY');
+
+        foreach ([...array_values($this->keyring), $this->appKey()] as $other) {
+            if ($other !== null && hash_equals($other, $decoded)) {
+                throw new RuntimeException('The [CRYPTO_HASH_KEY] must be a separate key: it may not equal an encryption key or APP_KEY.');
+            }
+        }
+
+        return $this->hashKey = $decoded;
+    }
+
+    /**
+     * Get the decoded application key, so the crypto keys can be kept apart from it.
+     */
+    private function appKey(): ?string
+    {
+        $key = Config::get('app.key');
+
+        if (! is_string($key) || $key === '') {
+            return null;
+        }
+
+        $decoded = str_starts_with($key, 'base64:') ? base64_decode(substr($key, 7), true) : $key;
+
+        return is_string($decoded) ? $decoded : null;
     }
 
     /**

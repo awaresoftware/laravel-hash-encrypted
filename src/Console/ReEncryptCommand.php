@@ -65,8 +65,8 @@ class ReEncryptCommand extends Command
             $model = new $modelClass;
 
             foreach ($this->columns($model) as $column) {
-                /** @var array{scanned: int, encrypted: int, failed: int} $stats */
-                $stats = ['scanned' => 0, 'encrypted' => 0, 'failed' => 0];
+                /** @var array{scanned: int, encrypted: int, changed: int, failed: int} $stats */
+                $stats = ['scanned' => 0, 'encrypted' => 0, 'changed' => 0, 'failed' => 0];
 
                 /** @var array<int, string> $failures */
                 $failures = [];
@@ -90,7 +90,7 @@ class ReEncryptCommand extends Command
                                             continue;
                                         }
 
-                                        $repacked = $crypto->repack($packed, $crypto->context($model::class, $column));
+                                        $repacked = $crypto->repack($packed, $crypto->context($model::class, $model->getTable(), $column));
                                     } catch (DecryptionFailed $exception) {
                                         $stats['failed']++;
 
@@ -101,8 +101,10 @@ class ReEncryptCommand extends Command
                                         continue;
                                     }
 
-                                    if (! $this->option('dry-run')) {
-                                        $this->updateRecord($model, $column, (string) $record->getKey(), $repacked);
+                                    if (! $this->option('dry-run') && ! $this->updateRecord($model, $column, (string) $record->getKey(), $packed, $repacked)) {
+                                        $stats['changed']++;
+
+                                        continue;
                                     }
 
                                     $stats['encrypted']++;
@@ -123,7 +125,7 @@ class ReEncryptCommand extends Command
                 }
 
                 $this->components->twoColumnDetail(
-                    sprintf('%d scanned, %d re-encrypted, %d failed', $stats['scanned'], $stats['encrypted'], $stats['failed']),
+                    sprintf('%d scanned, %d re-encrypted, %d changed concurrently, %d failed', $stats['scanned'], $stats['encrypted'], $stats['changed'], $stats['failed']),
                     $stats['failed'] > 0 ? '<fg=yellow;options=bold>Unresolved</>' : '<fg=green;options=bold>Done</>',
                 );
 
@@ -186,17 +188,22 @@ class ReEncryptCommand extends Command
     }
 
     /**
-     * Write a single re-encrypted value.
+     * Write a single re-encrypted value, unless the row changed since it was read.
      *
      * The base query builder is used on purpose: casts are bypassed so the
      * already packed value is stored verbatim, and the "updated_at" timestamp
      * is left alone because re-encryption does not change the record's data.
+     *
+     * The update only applies while the column still holds the value that was
+     * read, so a change the application made in the meantime is never reverted.
+     * Such a row is already written with the active key.
      */
-    protected function updateRecord(Model $model, string $column, string $key, string $packed): void
+    protected function updateRecord(Model $model, string $column, string $key, string $original, string $packed): bool
     {
-        $model->newQuery()
+        return $model->newQuery()
             ->toBase()
             ->where($model->getKeyName(), $key)
-            ->update([$column => $packed]);
+            ->where($column, $original)
+            ->update([$column => $packed]) > 0;
     }
 }

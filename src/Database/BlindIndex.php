@@ -119,19 +119,20 @@ final class BlindIndex
      * @param  class-string  $modelClass
      * @return Builder<TModel>
      */
-    public static function where(Builder $query, string $modelClass, string $column, string $value): Builder
+    public static function where(Builder $query, string $modelClass, string $column, #[\SensitiveParameter] string $value): Builder
     {
         self::guard($modelClass, $column);
 
         $connection = self::connectionFor($query);
+        $blindIndex = self::blindIndex($query->getModel(), $column, $value);
 
         if (self::strategy($connection) === 'prefix_like') {
-            return $query->where($column, 'LIKE', self::blindIndex($value).'%');
+            return $query->where($column, 'LIKE', $blindIndex.'%');
         }
 
         return $query->whereRaw(
             new BlindIndexExpression(self::expression($connection, $column).' = ?'),
-            [self::blindIndex($value)],
+            [$blindIndex],
         );
     }
 
@@ -145,12 +146,13 @@ final class BlindIndex
      * @param  array<int, string>  $values
      * @return Builder<TModel>
      */
-    public static function whereIn(Builder $query, string $modelClass, string $column, array $values): Builder
+    public static function whereIn(Builder $query, string $modelClass, string $column, #[\SensitiveParameter] array $values): Builder
     {
         self::guard($modelClass, $column);
 
         $connection = self::connectionFor($query);
-        $blindIndexes = array_map(self::blindIndex(...), $values);
+        $model = $query->getModel();
+        $blindIndexes = array_map(fn (string $value): string => self::blindIndex($model, $column, $value), $values);
 
         if ($blindIndexes === []) {
             return $query->whereRaw(
@@ -187,16 +189,13 @@ final class BlindIndex
 
     /**
      * Get the number of characters reserved for the blind index.
+     *
+     * The crypto service validates it against the configured HMAC algorithm, so
+     * the indexes a migration creates always cover exactly the blind index.
      */
     public static function length(): int
     {
-        $length = (int) Config::get('crypto.blind_index_length', 64);
-
-        if ($length < 32) {
-            throw new InvalidArgumentException('The crypto blind index length must be at least 32 characters.');
-        }
-
-        return $length;
+        return app(CryptoService::class)->blindIndexLength();
     }
 
     /**
@@ -214,11 +213,13 @@ final class BlindIndex
     }
 
     /**
-     * Get the blind index for the given plaintext.
+     * Get the blind index for the given plaintext in a model column.
      */
-    private static function blindIndex(string $value): string
+    public static function blindIndex(Model $model, string $column, #[\SensitiveParameter] string $value): string
     {
-        return app(CryptoService::class)->blindIndex($value);
+        $crypto = app(CryptoService::class);
+
+        return $crypto->blindIndex($value, $crypto->context($model::class, $model->getTable(), $column));
     }
 
     /**

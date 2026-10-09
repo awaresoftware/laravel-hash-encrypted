@@ -23,8 +23,8 @@ test('the first characters of a packed value are the blind index', function () {
 
     $packed = $crypto->pack('john@example.com', 'email');
 
-    expect(substr($packed, 0, 64))->toBe($crypto->blindIndex('john@example.com'))
-        ->and(strlen($crypto->blindIndex('john@example.com')))->toBe(64);
+    expect(substr($packed, 0, 64))->toBe($crypto->blindIndex('john@example.com', 'email'))
+        ->and(strlen($crypto->blindIndex('john@example.com', 'email')))->toBe(64);
 });
 
 test('the blind index is keyed so it cannot be reversed from the stored value', function () {
@@ -32,15 +32,15 @@ test('the blind index is keyed so it cannot be reversed from the stored value', 
 
     // A plain hash of a known address would be trivial to reverse with a word
     // list; the stored prefix must not match it.
-    expect($crypto->blindIndex('john@example.com'))
+    expect($crypto->blindIndex('john@example.com', 'email'))
         ->not->toBe(hash('sha256', 'john@example.com'));
 });
 
 test('the same input produces the same blind index prefix', function () {
     $crypto = app(CryptoService::class);
 
-    $packed1 = $crypto->pack('john@example.com');
-    $packed2 = $crypto->pack('  JOHN@EXAMPLE.COM  ');
+    $packed1 = $crypto->pack('john@example.com', 'email');
+    $packed2 = $crypto->pack('  JOHN@EXAMPLE.COM  ', 'email');
 
     expect(substr($packed1, 0, 64))->toBe(substr($packed2, 0, 64));
 });
@@ -48,14 +48,14 @@ test('the same input produces the same blind index prefix', function () {
 test('different inputs produce different blind indexes', function () {
     $crypto = app(CryptoService::class);
 
-    expect($crypto->blindIndex('john@example.com'))
-        ->not->toBe($crypto->blindIndex('jane@example.com'));
+    expect($crypto->blindIndex('john@example.com', 'email'))
+        ->not->toBe($crypto->blindIndex('jane@example.com', 'email'));
 });
 
 test('packing the same value twice produces a different ciphertext', function () {
     $crypto = app(CryptoService::class);
 
-    expect($crypto->pack('john@example.com'))->not->toBe($crypto->pack('john@example.com'));
+    expect($crypto->pack('john@example.com', 'email'))->not->toBe($crypto->pack('john@example.com', 'email'));
 });
 
 /*
@@ -117,7 +117,7 @@ test('values encrypted with a previous key remain readable after a rotation', fu
     $crypto = app(CryptoService::class);
     $previousKey = 'base64:'.base64_encode(random_bytes(32));
 
-    config([
+    configureCrypto([
         'crypto.encryption_key_id' => 2,
         'crypto.previous_encryption_keys' => ['1:'.config('crypto.encryption_key')],
         'crypto.encryption_key' => $previousKey,
@@ -144,11 +144,11 @@ test('values encrypted with a previous key remain readable after a rotation', fu
 test('a value encrypted with an unknown key cannot be decrypted', function () {
     $crypto = app(CryptoService::class);
 
-    config(['crypto.encryption_key_id' => 5]);
+    configureCrypto(['crypto.encryption_key_id' => 5]);
 
     $packed = (new CryptoService)->pack('john@example.com', 'email');
 
-    config([
+    configureCrypto([
         'crypto.encryption_key_id' => 1,
         'crypto.previous_encryption_keys' => [],
     ]);
@@ -162,7 +162,7 @@ test('a value cannot be decrypted with the wrong key material', function () {
 
     $packed = $crypto->pack('john@example.com', 'email');
 
-    config([
+    configureCrypto([
         'crypto.encryption_key' => 'base64:'.base64_encode(random_bytes(32)),
         'crypto.previous_encryption_keys' => [],
     ]);
@@ -212,7 +212,7 @@ test('the envelope version is validated', function () {
 });
 
 test('a non authenticated cipher is rejected', function () {
-    config(['crypto.cipher' => 'aes-256-cbc']);
+    configureCrypto(['crypto.cipher' => 'aes-256-cbc']);
 
     // The cipher is validated lazily, when a value is actually encrypted, so an
     // unauthenticated cipher must fail before any ciphertext is produced.
@@ -221,48 +221,206 @@ test('a non authenticated cipher is rejected', function () {
 });
 
 test('a blind index shorter than 32 characters is rejected', function () {
-    config(['crypto.blind_index_length' => 16]);
+    configureCrypto(['crypto.blind_index_length' => 16]);
 
     // The service only reads the length when it splits a packed value, and the
     // query side rejects it up front, so both paths have to fail.
     expect(fn () => app(CryptoService::class)->unpack(str_repeat('a', 64), 'email'))
-        ->toThrow(RuntimeException::class);
+        ->toThrow(RuntimeException::class, 'must equal');
 });
 
 test('a malformed key is reported with an actionable message', function () {
-    config(['crypto.encryption_key' => 'base64:not-a-32-byte-key']);
+    configureCrypto(['crypto.encryption_key' => 'base64:not-a-32-byte-key']);
 
     expect(fn () => new CryptoService)
         ->toThrow(RuntimeException::class, 'The [CRYPTO_ENCRYPTION_KEY] environment variable is missing or invalid.');
 });
 
 test('a missing blind index key is reported with an actionable message', function () {
-    config(['crypto.hash_key' => null]);
+    configureCrypto(['crypto.hash_key' => null]);
 
-    expect(fn () => app(CryptoService::class)->blindIndex('john@example.com'))
+    expect(fn () => app(CryptoService::class)->blindIndex('john@example.com', 'email'))
         ->toThrow(RuntimeException::class, 'The [CRYPTO_HASH_KEY] environment variable is missing or invalid.');
 });
 
 test('a malformed previous key entry is reported', function () {
-    config(['crypto.previous_encryption_keys' => ['not-a-pair']]);
+    configureCrypto(['crypto.previous_encryption_keys' => ['not-a-pair']]);
 
     expect(fn () => new CryptoService)
         ->toThrow(RuntimeException::class, 'must be a comma separated list of "keyId:key" pairs.');
 });
 
 test('an out of range encryption key id is rejected', function () {
-    config(['crypto.encryption_key_id' => 70000]);
+    configureCrypto(['crypto.encryption_key_id' => 70000]);
 
     expect(fn () => new CryptoService)
         ->toThrow(RuntimeException::class, 'must be between 0 and 65535');
 });
 
-test('the additional authenticated data is built from the configured template', function () {
+test('the field context is built from the configured template', function () {
     $crypto = app(CryptoService::class);
 
-    expect($crypto->context('App\\Models\\User', 'email'))->toBe('email');
+    expect($crypto->context('App\\Models\\User', 'users', 'email'))->toBe('users.email');
 
-    config(['crypto.aad' => '{model}:{column}']);
+    configureCrypto(['crypto.aad' => '{model}:{column}']);
 
-    expect($crypto->context('App\\Models\\User', 'email'))->toBe('App\\Models\\User:email');
+    expect($crypto->context('App\\Models\\User', 'users', 'email'))->toBe('App\\Models\\User:email');
 });
+
+/*
+|--------------------------------------------------------------------------
+| Security regressions
+|--------------------------------------------------------------------------
+*/
+
+test('the same value gets unrelated blind indexes in different fields', function () {
+    $crypto = app(CryptoService::class);
+
+    // One shared HMAC key let a database dump join tables on the prefix.
+    expect($crypto->blindIndex('john@example.com', 'users.email'))
+        ->not->toBe($crypto->blindIndex('john@example.com', 'contacts.email'))
+        ->and($crypto->blindIndex('john@example.com', 'users.email'))
+        ->not->toBe($crypto->blindIndex('john@example.com', 'users.name'))
+        ->and($crypto->blindIndex('john@example.com', 'users.email'))
+        ->toBe($crypto->blindIndex(' JOHN@example.com ', 'users.email'));
+})->group('security');
+
+test('an additional authenticated data template without the column is rejected', function () {
+    configureCrypto(['crypto.aad' => '{table}']);
+
+    expect(fn () => app(CryptoService::class)->context('App\\Models\\User', 'users', 'email'))
+        ->toThrow(RuntimeException::class, '{column}');
+})->group('security');
+
+test('a previous key cannot reuse the active key id', function () {
+    // The previous key used to overwrite the active one silently.
+    configureCrypto(['crypto.previous_encryption_keys' => ['1:base64:'.base64_encode(random_bytes(32))]]);
+
+    expect(fn () => new CryptoService)
+        ->toThrow(RuntimeException::class, 'key id [1]');
+})->group('security');
+
+test('previous key ids must be unique', function () {
+    configureCrypto(['crypto.previous_encryption_keys' => [
+        '2:base64:'.base64_encode(random_bytes(32)),
+        '2:base64:'.base64_encode(random_bytes(32)),
+    ]]);
+
+    expect(fn () => new CryptoService)
+        ->toThrow(RuntimeException::class, 'key id [2]');
+})->group('security');
+
+test('previous key ids must be integers between 0 and 65535', function (string $keyId) {
+    configureCrypto(['crypto.previous_encryption_keys' => [$keyId.':base64:'.base64_encode(random_bytes(32))]]);
+
+    expect(fn () => new CryptoService)->toThrow(RuntimeException::class);
+})->with(['70000', '-1', '1.5', '0x10'])->group('security');
+
+test('an active key is required even when previous keys are configured', function () {
+    configureCrypto([
+        'crypto.encryption_key' => null,
+        'crypto.previous_encryption_keys' => ['2:base64:'.base64_encode(random_bytes(32))],
+    ]);
+
+    expect(fn () => new CryptoService)
+        ->toThrow(RuntimeException::class, 'The [CRYPTO_ENCRYPTION_KEY] environment variable is missing or invalid.');
+})->group('security');
+
+test('a packed value whose prefix does not belong to its plaintext is rejected', function () {
+    $crypto = app(CryptoService::class);
+
+    // A row carrying the victim's blind index but the attacker's ciphertext
+    // would otherwise be found by the victim's address and read as the attacker's.
+    $victim = $crypto->pack('victim@example.com', 'users.email');
+    $attacker = $crypto->pack('attacker@example.com', 'users.email');
+
+    expect(fn () => $crypto->unpack(substr($victim, 0, 64).substr($attacker, 64), 'users.email'))
+        ->toThrow(DecryptionFailed::class);
+})->group('security');
+
+test('plaintext and key material never reach an exception trace', function () {
+    // Traces are logged and sent to error trackers.
+    $previous = ini_set('zend.exception_ignore_args', '0');
+
+    try {
+        configureCrypto(['crypto.hash_key' => null]);
+
+        $trace = '';
+
+        try {
+            app(CryptoService::class)->blindIndex('secret@example.com', 'users.email');
+        } catch (RuntimeException $exception) {
+            $trace = $exception->getTraceAsString();
+        }
+
+        configureCrypto(['crypto.encryption_key' => 'base64:'.base64_encode(str_repeat('k', 33))]);
+
+        try {
+            new CryptoService;
+        } catch (RuntimeException $exception) {
+            $trace .= $exception->getTraceAsString();
+        }
+    } finally {
+        ini_set('zend.exception_ignore_args', (string) $previous);
+    }
+
+    expect($trace)->not->toBe('')
+        ->and($trace)->not->toContain('secret@')
+        ->and($trace)->not->toContain(substr(base64_encode(str_repeat('k', 33)), 0, 8));
+})->group('security');
+
+test('composed and decomposed unicode share one blind index', function () {
+    $crypto = app(CryptoService::class);
+
+    // Normalization used to be skipped silently without ext-intl.
+    expect($crypto->blindIndex("Jose\u{0301}@example.com", 'users.email'))
+        ->toBe($crypto->blindIndex("Jos\u{00E9}@example.com", 'users.email'));
+})->group('security');
+
+test('a blind index algorithm outside the allowlist is rejected', function () {
+    // Md5 yields 32 hex characters, so the indexed prefix would include
+    // random ciphertext bytes and the unique index would enforce nothing.
+    configureCrypto(['crypto.hash_algorithm' => 'md5']);
+
+    expect(fn () => app(CryptoService::class)->blindIndex('john@example.com', 'users.email'))
+        ->toThrow(RuntimeException::class, 'not allowed');
+})->group('security');
+
+test('a blind index length that does not match the algorithm is rejected', function () {
+    configureCrypto(['crypto.hash_algorithm' => 'sha512', 'crypto.blind_index_length' => 64]);
+
+    expect(fn () => app(CryptoService::class)->blindIndex('john@example.com', 'users.email'))
+        ->toThrow(RuntimeException::class, 'must equal');
+})->group('security');
+
+test('a longer algorithm works when the length matches it', function () {
+    configureCrypto(['crypto.hash_algorithm' => 'sha512', 'crypto.blind_index_length' => 128]);
+
+    $crypto = app(CryptoService::class);
+    $packed = $crypto->pack('john@example.com', 'users.email');
+
+    expect(strlen($crypto->blindIndex('john@example.com', 'users.email')))->toBe(128)
+        ->and($crypto->unpack($packed, 'users.email'))->toBe('john@example.com');
+})->group('security');
+
+test('the blind index key must differ from the encryption key', function () {
+    // One leaked key would otherwise unlock both rotation domains.
+    configureCrypto(['crypto.hash_key' => config('crypto.encryption_key')]);
+
+    expect(fn () => app(CryptoService::class)->blindIndex('john@example.com', 'users.email'))
+        ->toThrow(RuntimeException::class, 'separate');
+})->group('security');
+
+test('the blind index key must differ from APP_KEY', function () {
+    configureCrypto(['app.key' => config('crypto.hash_key')]);
+
+    expect(fn () => app(CryptoService::class)->blindIndex('john@example.com', 'users.email'))
+        ->toThrow(RuntimeException::class, 'separate');
+})->group('security');
+
+test('the encryption key must differ from APP_KEY', function () {
+    configureCrypto(['app.key' => config('crypto.encryption_key')]);
+
+    expect(fn () => new CryptoService)
+        ->toThrow(RuntimeException::class, 'separate');
+})->group('security');

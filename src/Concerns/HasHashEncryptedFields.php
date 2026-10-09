@@ -3,7 +3,6 @@
 namespace Aware\HashEncrypted\Concerns;
 
 use Aware\HashEncrypted\Casts\Encrypted;
-use Aware\HashEncrypted\CryptoService;
 use Aware\HashEncrypted\Database\BlindIndex;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -35,11 +34,14 @@ trait HasHashEncryptedFields
     }
 
     /**
-     * Get the searchable blind index for the given plaintext.
+     * Get the searchable blind index for the given plaintext in the given column.
+     *
+     * Blind indexes are derived per table and column, so the result only ever
+     * matches values stored in that column.
      */
-    public function blindIndex(string $value): string
+    public function blindIndex(string $column, #[\SensitiveParameter] string $value): string
     {
-        return app(CryptoService::class)->blindIndex($value);
+        return BlindIndex::blindIndex($this, $column, $value);
     }
 
     /**
@@ -61,7 +63,7 @@ trait HasHashEncryptedFields
      * @param  Builder<static>  $query
      * @return Builder<static>
      */
-    public function scopeWhereEncrypted(Builder $query, string $column, string $value): Builder
+    public function scopeWhereEncrypted(Builder $query, string $column, #[\SensitiveParameter] string $value): Builder
     {
         return BlindIndex::where($query, static::class, $column, $value);
     }
@@ -73,7 +75,7 @@ trait HasHashEncryptedFields
      * @param  array<int, string>  $values
      * @return Builder<static>
      */
-    public function scopeWhereEncryptedIn(Builder $query, string $column, array $values): Builder
+    public function scopeWhereEncryptedIn(Builder $query, string $column, #[\SensitiveParameter] array $values): Builder
     {
         return BlindIndex::whereIn($query, static::class, $column, $values);
     }
